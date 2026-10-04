@@ -11,3 +11,6 @@ wheels/
 
 # Agent workspace (personal notes written by the agent)
 workspace/
+
+# Secrets
+.env

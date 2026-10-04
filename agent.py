@@ -1,9 +1,9 @@
 """
-My Deep Agent: a personal assistant built with LangChain Deep Agents + Claude.
+My Deep Agent: a personal assistant built with LangChain Deep Agents + Gemini.
 
 The four layers in this file:
-  MODEL      Claude Opus 5.5                    -> make_model()
-  SDK/API    langchain-anthropic (calls Anthropic's API for you)
+  MODEL      Google Gemini (free tier)          -> make_model()
+  SDK/API    langchain-google-genai (calls Google's Gemini API for you)
   HARNESS    LangChain Deep Agents              -> create_deep_agent(...)
   YOUR AGENT 2 custom tools + a system prompt + a notes folder
 
@@ -11,39 +11,45 @@ Compared with the hand-written version, notice what's MISSING here:
 there is no agent loop. Deep Agents runs the loop for you.
 
 Run it:   .venv/bin/python agent.py
+(Your GOOGLE_API_KEY is read from the .env file next to this script.)
 """
 
 import ast
+import os
 import operator
 from datetime import datetime
 from pathlib import Path
 
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
-from langchain_anthropic import ChatAnthropic
+from dotenv import load_dotenv
+from langchain.agents.middleware import ModelRetryMiddleware
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_genai.chat_models import GoogleRateLimitError
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
+load_dotenv(Path(__file__).parent / ".env")  # puts GOOGLE_API_KEY into the environment
 WORKSPACE = Path(__file__).parent / "workspace"  # the only folder the agent can read/write
 
 
 # ---------------------------------------------------------------------------
-# LAYER 1 - MODEL: Claude, via LangChain's Anthropic connector.
-# Swapping the model (GPT, Gemini, Ollama...) only means changing this function.
+# LAYER 1 - MODEL: Gemini, via LangChain's Google connector.
+# Swapping the model (Claude, GPT, Ollama...) only means changing this function.
+# (It used to be ChatAnthropic(model="claude-opus-5-5") - nothing else changed.)
 # ---------------------------------------------------------------------------
 
 def make_model():
-    return ChatAnthropic(
-        model="claude-opus-5-5",
-        max_tokens=16000,
-        output_config={"effort": "medium"},  # how hard Claude thinks: low / medium / high
+    return ChatGoogleGenerativeAI(
+        model=os.environ.get("GEMINI_MODEL", "gemini-3.5-flash"),
+        max_output_tokens=16000,
     )
 
 
 # ---------------------------------------------------------------------------
 # YOUR TOOLS: plain Python functions. Deep Agents reads the function name,
 # the type hints, and the docstring, and turns them into the tool description
-# Claude sees. (In the hand-written version you wrote that JSON by hand.)
+# the model sees. (In the hand-written version you wrote that JSON by hand.)
 # ---------------------------------------------------------------------------
 
 def get_current_time() -> str:
@@ -96,6 +102,19 @@ def build_agent():
         backend=FilesystemBackend(root_dir=WORKSPACE, virtual_mode=True),
         # Remembers the conversation between your messages (lost when you quit).
         checkpointer=InMemorySaver(),
+        # Gemini's free tier allows only a few requests per minute, and one question
+        # can take several calls. When we hit the limit, wait and try again
+        # (20s, 30s, 45s, 60s) instead of crashing.
+        middleware=[
+            ModelRetryMiddleware(
+                retry_on=(GoogleRateLimitError,),
+                max_retries=4,
+                initial_delay=20,
+                backoff_factor=1.5,
+                max_delay=60,
+                on_failure=lambda e: "Sorry, I hit Gemini's free-tier rate limit. Please wait a minute and ask again.",
+            )
+        ],
     )
 
 

@@ -1,0 +1,10 @@
+[project]
+name = "my-deep-agent"
+version = "0.1.0"
+description = "A personal assistant agent built with LangChain Deep Agents and Claude"
+requires-python = ">=3.12"
+dependencies = [
+    "deepagents>=0.7.21",
+    "langchain-anthropic>=1.7.5",
+]
+

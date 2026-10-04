@@ -43,6 +43,7 @@ def make_model():
     return ChatGoogleGenerativeAI(
         model=os.environ.get("GEMINI_MODEL", "gemini-3.5-flash"),
         max_output_tokens=16000,
+        max_retries=0,  # retries are handled (visibly) by the middleware in build_agent()
     )
 
 
@@ -92,6 +93,19 @@ notes, read /notes.md."""
 # LAYER 3 - HARNESS: one call builds the whole agent.
 # ---------------------------------------------------------------------------
 
+def is_daily_limit(error: Exception) -> bool:
+    return "PerDay" in str(error)
+
+
+def should_retry(error: Exception) -> bool:
+    """Retry the per-minute rate limit (it clears in seconds), but not the daily
+    limit (it clears tomorrow - waiting would just look like the agent froze)."""
+    if isinstance(error, GoogleRateLimitError) and not is_daily_limit(error):
+        print("   ⏳ Gemini's per-minute limit reached - waiting, then retrying...")
+        return True
+    return False
+
+
 def build_agent():
     WORKSPACE.mkdir(exist_ok=True)
     return create_deep_agent(
@@ -103,11 +117,11 @@ def build_agent():
         # Remembers the conversation between your messages (lost when you quit).
         checkpointer=InMemorySaver(),
         # Gemini's free tier allows only a few requests per minute, and one question
-        # can take several calls. When we hit the limit, wait and try again
-        # (20s, 30s, 45s, 60s) instead of crashing.
+        # can take several calls. When we hit the per-minute limit, wait and try
+        # again (20s, 30s, 45s, 60s) instead of crashing.
         middleware=[
             ModelRetryMiddleware(
-                retry_on=(GoogleRateLimitError,),
+                retry_on=should_retry,
                 max_retries=4,
                 initial_delay=20,
                 backoff_factor=1.5,
@@ -147,8 +161,15 @@ def main():
         user_input = input("You: ").strip()
         if user_input.lower() in {"quit", "exit"}:
             break
-        if user_input:
+        if not user_input:
+            continue
+        try:
             print(f"Agent: {chat(agent, user_input)}\n")
+        except GoogleRateLimitError as e:
+            if not is_daily_limit(e):
+                raise
+            print("Agent: Sorry, this Gemini model's free daily limit is used up. "
+                  "Try again tomorrow, or set a different GEMINI_MODEL in .env.\n")
 
 
 if __name__ == "__main__":

@@ -133,9 +133,11 @@ def build_agent():
 
 
 def chat(agent, user_input: str, thread_id: str = "main") -> str:
-    """Send one message and print each step the agent takes along the way."""
+    """Send one message and print each step the agent takes along the way:
+    every LLM response, every tool it asks for, and every tool result."""
     config = {"configurable": {"thread_id": thread_id}}
     final = ""
+    llm_calls = 0
     for update in agent.stream(
         {"messages": [{"role": "user", "content": user_input}]},
         config,
@@ -144,8 +146,16 @@ def chat(agent, user_input: str, thread_id: str = "main") -> str:
         for step in update.values():
             for msg in (step or {}).get("messages", []) if isinstance(step, dict) else []:
                 if isinstance(msg, AIMessage):
+                    # One AIMessage = one response from the LLM.
+                    llm_calls += 1
+                    usage = msg.usage_metadata or {}
+                    print(f"   🧠 LLM response #{llm_calls} "
+                          f"({usage.get('input_tokens', '?')} tokens in, {usage.get('output_tokens', '?')} out)")
+                    if msg.text:
+                        label = "final answer" if not msg.tool_calls else "says"
+                        print(f"      💬 {label}: {msg.text.strip()}")
                     for call in msg.tool_calls:
-                        print(f"   🔧 {call['name']}({call['args']})")
+                        print(f"      🔧 wants tool: {call['name']}({call['args']})")
                     if not msg.tool_calls and msg.text:
                         final = msg.text
                 elif isinstance(msg, ToolMessage):
